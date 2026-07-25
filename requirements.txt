@@ -1,0 +1,7 @@
+pandas
+streamlit
+anthropic
+python-dotenv
+numpy
+groq
+pyarrow          # Parquet mirror so a loaded dataset survives a browser refresh

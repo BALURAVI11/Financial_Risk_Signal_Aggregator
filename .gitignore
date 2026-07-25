@@ -1,0 +1,13 @@
+# Python environment files
+venv/
+.env
+
+# Cache files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.DS_Store
+
+# Dataset mirrored to disk so it survives a browser refresh (see app.py)
+.session_cache/

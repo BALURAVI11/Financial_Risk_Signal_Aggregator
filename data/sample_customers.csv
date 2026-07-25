@@ -1,0 +1,103 @@
+account_id,customer_name,declared_income_annual,occupation,pep_flag,kyc_risk_rating,onboarding_date
+ACC100001,Aarav Sharma,46740000,Salaried - IT,N,LOW,2023-05-27
+ACC100002,Vivaan Gupta,8230000,Business Owner,N,MEDIUM,2019-04-23
+ACC100003,Aditya Kapoor,3020000,Teacher,N,LOW,2020-08-27
+ACC100004,Ananya Verma,93910000,Real Estate Agent,N,MEDIUM,2020-07-11
+ACC100005,Diya Menon,33740000,Self-employed - Retail,N,LOW,2024-01-20
+ACC100006,Ishaan Malhotra,15980000,Doctor,N,LOW,2021-01-13
+ACC100007,Kavya Patel,7720000,Trader,N,HIGH,2023-12-21
+ACC100008,Rohan Kulkarni,28070000,Salaried - Banking,N,MEDIUM,2020-03-27
+ACC100009,Meera Joshi,9560000,Consultant,N,LOW,2025-03-12
+ACC100010,Arjun Reddy,20930000,Government Service,N,MEDIUM,2025-05-18
+ACC100011,Sneha Desai,12920000,Salaried - IT,N,MEDIUM,2022-06-19
+ACC100012,Karthik Pillai,11580000,Business Owner,N,LOW,2021-04-28
+ACC100013,Priya Nair,7940000,Teacher,N,LOW,2023-02-23
+ACC100014,Rahul Rao,13440000,Real Estate Agent,N,MEDIUM,2019-10-29
+ACC100015,Nisha Shetty,14270000,Self-employed - Retail,N,LOW,2025-05-29
+ACC100016,Sanjay Iyer,4840000,Doctor,N,MEDIUM,2025-04-28
+ACC100017,Divya Chatterjee,3960000,Trader,N,MEDIUM,2021-06-01
+ACC100018,Vikram Bhat,5400000,Salaried - Banking,N,MEDIUM,2022-11-29
+ACC100019,Pooja Singh,13910000,Consultant,N,LOW,2024-07-21
+ACC100020,Amit Bose,8670000,Government Service,N,LOW,2022-10-24
+ACC100021,Lakshmi Sharma,6080000,Salaried - IT,N,HIGH,2026-01-28
+ACC100022,Rajesh Gupta,2480000,Business Owner,N,MEDIUM,2022-08-01
+ACC100023,Anita Kapoor,7180000,Teacher,N,LOW,2021-09-07
+ACC100024,Suresh Verma,47680000,Real Estate Agent,N,LOW,2023-05-04
+ACC100025,Deepa Menon,11100000,Self-employed - Retail,N,LOW,2022-09-01
+ACC100026,Manish Malhotra,7860000,Doctor,N,LOW,2020-10-10
+ACC100027,Ritu Patel,14760000,Trader,N,MEDIUM,2019-06-13
+ACC100028,Naveen Kulkarni,6570000,Salaried - Banking,N,MEDIUM,2023-09-13
+ACC100029,Swati Joshi,79270000,Consultant,N,MEDIUM,2019-11-28
+ACC100030,Harsh Reddy,14470000,Government Service,N,MEDIUM,2020-05-17
+ACC100031,Aarav Desai,7920000,Salaried - IT,Y,MEDIUM,2020-10-09
+ACC100032,Vivaan Pillai,4590000,Business Owner,N,LOW,2023-09-21
+ACC100033,Aditya Nair,32210000,Teacher,N,LOW,2024-04-10
+ACC100034,Ananya Rao,1490000,Real Estate Agent,N,LOW,2020-03-10
+ACC100035,Diya Shetty,20650000,Self-employed - Retail,N,LOW,2022-07-01
+ACC100036,Ishaan Iyer,98020000,Doctor,N,LOW,2021-11-12
+ACC100037,Kavya Chatterjee,50240000,Trader,N,LOW,2020-08-11
+ACC100038,Rohan Bhat,5210000,Salaried - Banking,N,LOW,2021-10-24
+ACC100039,Meera Singh,14250000,Consultant,N,MEDIUM,2021-08-06
+ACC100040,Arjun Bose,9900000,Government Service,N,LOW,2021-04-01
+ACC100041,Sneha Sharma,7800000,Salaried - IT,N,LOW,2020-01-05
+ACC100042,Karthik Gupta,28730000,Business Owner,N,LOW,2019-10-07
+ACC100043,Priya Kapoor,24730000,Teacher,N,LOW,2023-04-03
+ACC100044,Rahul Verma,21500000,Real Estate Agent,N,HIGH,2025-12-19
+ACC100045,Nisha Menon,8370000,Self-employed - Retail,N,HIGH,2022-02-01
+ACC100046,Sanjay Malhotra,10020000,Doctor,Y,MEDIUM,2021-10-09
+ACC100047,Divya Patel,11280000,Trader,N,LOW,2021-12-23
+ACC100048,Vikram Kulkarni,8810000,Salaried - Banking,N,LOW,2023-03-31
+ACC100049,Pooja Joshi,13620000,Consultant,N,LOW,2025-09-12
+ACC100050,Amit Reddy,13870000,Government Service,N,LOW,2020-08-13
+ACC1001,Lakshmi Desai,300000,Salaried - IT,N,HIGH,2021-11-18
+ACC1002,Rajesh Pillai,300000,Business Owner,N,LOW,2023-11-07
+ACC1003,Anita Nair,300000,Teacher,N,MEDIUM,2020-04-05
+ACC1004,Suresh Rao,300000,Real Estate Agent,N,MEDIUM,2021-07-23
+ACC1005,Deepa Shetty,300000,Self-employed - Retail,N,MEDIUM,2024-10-30
+ACC1006,Manish Iyer,300000,Doctor,N,LOW,2024-05-09
+ACC1007,Ritu Chatterjee,300000,Trader,N,LOW,2021-02-24
+ACC1008,Naveen Bhat,300000,Salaried - Banking,N,LOW,2023-12-05
+ACC1009,Swati Singh,300000,Consultant,N,LOW,2021-06-15
+ACC1010,Harsh Bose,300000,Government Service,N,LOW,2022-02-23
+ACC1011,Aarav Sharma,300000,Salaried - IT,N,LOW,2023-11-21
+ACC1012,Vivaan Gupta,300000,Business Owner,N,LOW,2025-03-14
+ACC1013,Aditya Kapoor,300000,Teacher,N,LOW,2024-07-06
+ACC1014,Ananya Verma,300000,Real Estate Agent,N,MEDIUM,2020-05-17
+ACC1015,Diya Menon,300000,Self-employed - Retail,N,LOW,2019-12-25
+ACC1016,Ishaan Malhotra,300000,Doctor,N,MEDIUM,2021-08-24
+ACC1017,Kavya Patel,300000,Trader,N,LOW,2024-01-14
+ACC1018,Rohan Kulkarni,300000,Salaried - Banking,N,LOW,2020-04-22
+ACC1019,Meera Joshi,300000,Consultant,N,LOW,2025-06-17
+ACC1020,Arjun Reddy,300000,Government Service,N,LOW,2025-02-19
+ACC1021,Sneha Desai,300000,Salaried - IT,N,MEDIUM,2025-08-21
+ACC1022,Karthik Pillai,300000,Business Owner,N,MEDIUM,2022-06-09
+ACC1023,Priya Nair,300000,Teacher,N,LOW,2024-02-28
+ACC1024,Rahul Rao,300000,Real Estate Agent,N,LOW,2022-02-07
+ACC1025,Nisha Shetty,300000,Self-employed - Retail,N,LOW,2020-05-03
+ACC2001,Sanjay Iyer,300000,Doctor,N,HIGH,2024-08-30
+ACC2002,Divya Chatterjee,300000,Trader,N,LOW,2025-05-18
+ACC2003,Vikram Bhat,520000,Salaried - Banking,N,MEDIUM,2019-06-22
+ACC2004,Pooja Singh,420000,Consultant,N,LOW,2024-03-14
+ACC2005,Amit Bose,3900000,Government Service,N,MEDIUM,2024-02-19
+ACC2006,Lakshmi Sharma,1070000,Salaried - IT,N,LOW,2022-02-02
+ACC2007,Rajesh Gupta,300000,Business Owner,Y,LOW,2022-07-11
+ACC2008,Anita Kapoor,300000,Teacher,N,MEDIUM,2024-02-21
+ACC2009,Suresh Verma,300000,Real Estate Agent,Y,LOW,2023-02-02
+ACC2010,Deepa Menon,300000,Self-employed - Retail,N,HIGH,2021-01-14
+ACC2011,Manish Malhotra,300000,Doctor,N,LOW,2020-11-16
+ACC2012,Ritu Patel,1380000,Trader,N,LOW,2022-08-12
+ACC2013,Naveen Kulkarni,1840000,Salaried - Banking,N,LOW,2025-06-05
+ACC2014,Swati Joshi,300000,Consultant,N,MEDIUM,2023-05-20
+ACC2015,Harsh Reddy,300000,Government Service,N,LOW,2024-04-22
+ACC300,Aarav Desai,300000,Salaried - IT,N,LOW,2023-07-25
+ACC301,Vivaan Pillai,300000,Business Owner,N,LOW,2023-10-09
+ACC302,Aditya Nair,300000,Teacher,N,LOW,2023-05-21
+ACC303,Ananya Rao,300000,Real Estate Agent,N,LOW,2025-03-18
+ACC304,Diya Shetty,300000,Self-employed - Retail,N,LOW,2024-10-04
+ACC305,Ishaan Iyer,300000,Doctor,N,LOW,2024-06-13
+ACC4002,Kavya Chatterjee,300000,Trader,N,LOW,2024-09-20
+ACC4006,Rohan Bhat,300000,Salaried - Banking,N,LOW,2025-01-23
+ACC4007,Meera Singh,300000,Consultant,N,LOW,2025-05-02
+ACC4008,Arjun Bose,300000,Government Service,N,LOW,2021-04-17
+ACC4009,Sneha Sharma,300000,Salaried - IT,N,MEDIUM,2021-09-19
+ACC4012,Karthik Gupta,300000,Business Owner,N,MEDIUM,2024-03-27
