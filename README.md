@@ -364,11 +364,18 @@ asked to do.
 
 ## Known Gaps / Next Steps
 
-- Optional enhancements implemented: natural-language query interface, visual
-  dashboard.
-- Not yet implemented: multi-source correlation across *separate* datasets
-  (e.g. joining transaction data with a KYC/watchlist feed) — currently all
-  signals come from the single transaction file.
+- Optional enhancements implemented: multi-source correlation (transaction
+  ledger + customer/KYC master + unstructured analyst notes), natural-language
+  query interface, visual dashboard.
 - Detector thresholds are tuned against synthetic and semi-synthetic data. On
   real production traffic they would need recalibration against labelled
   outcomes (confirmed fraud / cleared alerts) rather than injected anomalies.
+- **Multi-currency input.** Currently the engine assumes every amount is INR;
+  a `$` prefix in the input is stripped and the number is treated as rupees,
+  so a dollar-denominated file is silently mislabeled. A currency *selector*
+  that changes the display symbol/digit-grouping is a small, safe addition.
+  Making detection itself currency-aware is a bigger task than it sounds —
+  reporting thresholds like India's ₹10,00,000 and the US's $10,000 CTR band
+  are independently legislated, not an FX conversion of each other, so doing
+  this correctly needs a per-jurisdiction threshold table, not an exchange
+  rate. Deferred for that reason rather than attempted partially.
