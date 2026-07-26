@@ -256,6 +256,15 @@ def cached_executive_summary(signature: str, _stats: dict, _cases) -> str:
     return AI.generate_executive_summary(_stats, _cases)
 
 
+@st.cache_data(show_spinner=False)
+def cached_rationale(transaction_id: str, _row) -> str:
+    """Cache key is the transaction id alone, same convention as
+    cached_case_narrative — without this, the rationale panel re-calls the
+    LLM on every rerun (any click anywhere in the app), not just when the
+    selected transaction actually changes."""
+    return generate_rationale(_row)
+
+
 # An analyst queue has finite capacity. Because several detectors are
 # percentile-based, the number of matches grows with the size of the file — so
 # the queue is capped and the honest "X matched, showing top N" is surfaced
@@ -943,7 +952,7 @@ with tab_alert_center:
             report_placeholder = st.empty()
             report_placeholder.markdown("*Generating intelligent analysis...*")
 
-            explanation = generate_rationale(selected_row)
+            explanation = cached_rationale(selected_row["transaction_id"], selected_row)
 
             report_placeholder.markdown(f"""
             <div class="ai-report">
