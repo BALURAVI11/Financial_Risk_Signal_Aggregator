@@ -4,4 +4,5 @@ anthropic
 python-dotenv
 numpy
 groq
+google-genai
 pyarrow          # Parquet mirror so a loaded dataset survives a browser refresh

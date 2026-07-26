@@ -85,7 +85,8 @@ re-running the detector suite.
 ## Tools Used
 
 Python · pandas · NumPy · PyArrow · Streamlit · Groq API (Llama 3.3 70B) /
-Anthropic API (Claude) · python-dotenv
+Anthropic API (Claude) / Gemini API (Gemini 2.5 Flash), with automatic
+cross-provider failover · python-dotenv
 
 ## Risk Detection Logic (`risk_engine.py`)
 
@@ -214,10 +215,17 @@ pip install -r requirements.txt
 Configure `.env` (all optional — the app runs fully offline without any key,
 using local fallback rationale):
 ```env
-AI_PROVIDER=groq                # "groq" (default) or "anthropic"
+AI_PROVIDER=groq                # primary: "groq" (default), "anthropic", or "gemini"
 GROQ_API_KEY=                   # https://console.groq.com/keys
 ANTHROPIC_API_KEY=
+GEMINI_API_KEY=                 # https://aistudio.google.com/apikey
 ```
+
+**Automatic failover.** If more than one key is configured, a rate limit or
+outage on the primary provider is not visible to the user — the app tries
+the next configured provider before giving up, and only shows an error once
+every configured provider has failed. This is what stops a single provider's
+free-tier daily cap from ever showing up on screen mid-session.
 
 Run it:
 ```bash
@@ -239,14 +247,15 @@ Credentials are therefore resolved from **the environment first, then
 
 On Streamlit Cloud the Secrets panel takes TOML:
 ```toml
-AI_PROVIDER  = "groq"
-GROQ_API_KEY = "your_key_here"
+AI_PROVIDER    = "groq"
+GROQ_API_KEY   = "your_key_here"
+GEMINI_API_KEY = "your_key_here"   # optional — enables failover if Groq is rate-limited
 ```
 
-Keys are also passed explicitly into the Groq/Anthropic clients rather than
-relying on their implicit environment lookup — a key arriving via `st.secrets`
-never reaches the environment, so the implicit path would silently fail in
-exactly the deployed case it is needed for.
+Keys are also passed explicitly into the Groq/Anthropic/Gemini clients rather
+than relying on their implicit environment lookup — a key arriving via
+`st.secrets` never reaches the environment, so the implicit path would
+silently fail in exactly the deployed case it is needed for.
 
 The sidebar always states which mode is active, so a missing key is visible
 rather than silent.

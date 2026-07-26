@@ -11,13 +11,18 @@ Usage:
     flagged_df = add_ai_rationale(flagged_df)
 
 Requires:
-    pip install groq anthropic python-dotenv
-    A .env file with either: GROQ_API_KEY=your_key_here
-                          or: ANTHROPIC_API_KEY=your_key_here
+    pip install groq anthropic google-genai python-dotenv
+    A .env file with one or more of:
+        GROQ_API_KEY=your_key_here
+        ANTHROPIC_API_KEY=your_key_here
+        GEMINI_API_KEY=your_key_here
 
-If neither key is present, the module automatically falls back to a
-deterministic local explanation template (no network calls, no cost) so the
-rest of the app keeps working end-to-end.
+AI_PROVIDER picks the primary. Configuring more than one key also gets you
+automatic failover: if the primary is rate-limited or unavailable for a
+given call, the next configured provider is tried before giving up. If no
+key is present at all, the module falls back to a deterministic local
+explanation template (no network calls, no cost) so the rest of the app
+keeps working end-to-end.
 """
 
 import json
@@ -58,31 +63,45 @@ def _get_secret(name: str, default: str = "") -> str:
     return default
 
 
-PROVIDER = _get_secret("AI_PROVIDER", "groq").lower()      # "groq" or "anthropic"
-MODEL = _get_secret(
-    "AI_MODEL",
-    "llama-3.3-70b-versatile" if PROVIDER == "groq" else "claude-sonnet-4-6",
-)
+DEFAULT_MODEL = {
+    "groq": "llama-3.3-70b-versatile",
+    "anthropic": "claude-sonnet-4-6",
+    "gemini": "gemini-2.5-flash",
+}
+
+PROVIDER = _get_secret("AI_PROVIDER", "groq").lower()      # "groq", "anthropic", or "gemini"
+MODEL = _get_secret("AI_MODEL", DEFAULT_MODEL.get(PROVIDER, DEFAULT_MODEL["groq"]))
 MAX_RETRIES = 3
 
 GROQ_API_KEY = _get_secret("GROQ_API_KEY")
 ANTHROPIC_API_KEY = _get_secret("ANTHROPIC_API_KEY")
+GEMINI_API_KEY = _get_secret("GEMINI_API_KEY")
 GROQ_KEY_PRESENT = bool(GROQ_API_KEY)
 ANTHROPIC_KEY_PRESENT = bool(ANTHROPIC_API_KEY)
+GEMINI_KEY_PRESENT = bool(GEMINI_API_KEY)
 
-# Auto-detect: use whichever provider actually has a key configured, falling
-# back to the local template if neither is set. This means the app "just
-# works" the moment a key appears — in `.env` locally or in the host's secrets
-# panel once deployed — without editing code.
-if PROVIDER == "groq" and not GROQ_KEY_PRESENT and ANTHROPIC_KEY_PRESENT:
-    PROVIDER = "anthropic"
-    MODEL = _get_secret("AI_MODEL", "claude-sonnet-4-6")
-elif PROVIDER == "anthropic" and not ANTHROPIC_KEY_PRESENT and GROQ_KEY_PRESENT:
-    PROVIDER = "groq"
-    MODEL = _get_secret("AI_MODEL", "llama-3.3-70b-versatile")
+_KEY_PRESENT = {"groq": GROQ_KEY_PRESENT, "anthropic": ANTHROPIC_KEY_PRESENT, "gemini": GEMINI_KEY_PRESENT}
 
-HAS_API = (PROVIDER == "groq" and GROQ_KEY_PRESENT) or (PROVIDER == "anthropic" and ANTHROPIC_KEY_PRESENT)
+# Auto-detect: if the configured primary has no key, promote whichever
+# provider actually does. This means the app "just works" the moment any one
+# key appears — in `.env` locally or in the host's secrets panel once
+# deployed — without editing code.
+if not _KEY_PRESENT.get(PROVIDER):
+    for _candidate in ("groq", "gemini", "anthropic"):
+        if _KEY_PRESENT[_candidate]:
+            PROVIDER = _candidate
+            MODEL = _get_secret("AI_MODEL", DEFAULT_MODEL[_candidate])
+            break
+
+HAS_API = any(_KEY_PRESENT.values())
 DRY_RUN = not HAS_API
+
+# Failover order for a single call: the configured primary first, then every
+# other provider that has a key, so a mid-call outage on one (a rate limit,
+# a timeout) doesn't surface as a visible error as long as another is
+# available — see _call_ai below.
+_FAILOVER_ORDER = [PROVIDER] + [p for p in ("groq", "gemini", "anthropic")
+                                 if p != PROVIDER and _KEY_PRESENT[p]]
 
 # Human-readable descriptions of each detector, used to give the AI context
 # on what each flag actually means (better than just passing the raw name).
@@ -137,6 +156,15 @@ Flagged signals:
 Write the risk explanation now (2 sentences, no preamble):"""
 
 
+def _model_for(provider: str) -> str:
+    """The configured MODEL applies to whichever provider is PRIMARY; a
+    provider only reached via failover uses its own sane default instead of
+    the primary's model name (e.g. Gemini must never be called with
+    "llama-3.3-70b-versatile" just because that's what Groq was configured
+    with)."""
+    return MODEL if provider == PROVIDER else DEFAULT_MODEL[provider]
+
+
 def _call_claude(prompt: str, max_tokens: int = 200) -> str:
     from anthropic import Anthropic
 
@@ -144,45 +172,96 @@ def _call_claude(prompt: str, max_tokens: int = 200) -> str:
     # deployed app the key arrives via st.secrets and is never in the
     # environment, so the implicit path would fail there.
     client = Anthropic(api_key=ANTHROPIC_API_KEY or None)
+    last_err = None
     for attempt in range(MAX_RETRIES):
         try:
             response = client.messages.create(
-                model=MODEL,
+                model=_model_for("anthropic"),
                 max_tokens=max_tokens,
                 messages=[{"role": "user", "content": prompt}],
             )
             return response.content[0].text.strip()
         except Exception as e:
-            if attempt == MAX_RETRIES - 1:
-                return f"[AI rationale unavailable — error: {e}]"
-            time.sleep(2 ** attempt)  # exponential backoff
+            last_err = e
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(2 ** attempt)  # exponential backoff
+    raise last_err
 
 
 def _call_groq(prompt: str, max_tokens: int = 200) -> str:
     from groq import Groq
 
     client = Groq(api_key=GROQ_API_KEY or None)   # see note in _call_claude
+    last_err = None
     for attempt in range(MAX_RETRIES):
         try:
             response = client.chat.completions.create(
-                model=MODEL,
+                model=_model_for("groq"),
                 max_tokens=max_tokens,
                 messages=[{"role": "user", "content": prompt}],
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
-            if attempt == MAX_RETRIES - 1:
-                return f"[AI rationale unavailable — error: {e}]"
-            time.sleep(2 ** attempt)  # exponential backoff
+            last_err = e
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(2 ** attempt)  # exponential backoff
+    raise last_err
+
+
+def _call_gemini(prompt: str, max_tokens: int = 200) -> str:
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=GEMINI_API_KEY or None)   # see note in _call_claude
+    last_err = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = client.models.generate_content(
+                model=_model_for("gemini"),
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    max_output_tokens=max_tokens,
+                    # Gemini 2.5 models "think" before answering by default,
+                    # spending part of max_output_tokens on hidden reasoning
+                    # tokens the caller never sees. For a short, grounded
+                    # rationale that budget is wasted at best and at worst
+                    # (a tight max_tokens) consumes the whole budget and
+                    # leaves no tokens for the actual visible answer.
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                ),
+            )
+            text = (response.text or "").strip()
+            if not text:
+                raise ValueError(f"Gemini returned no text (finish_reason={response.candidates[0].finish_reason if response.candidates else 'no candidates'})")
+            return text
+        except Exception as e:
+            last_err = e
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(2 ** attempt)  # exponential backoff
+    raise last_err
+
+
+_CALL_FN = {"groq": _call_groq, "anthropic": _call_claude, "gemini": _call_gemini}
 
 
 def _call_ai(prompt: str, max_tokens: int = 200) -> str:
     """Single entry point for every LLM call. `max_tokens` is per-call because a
     two-sentence transaction rationale and a full case narrative have very
-    different budgets — a shared cap silently truncated the longer ones."""
-    if PROVIDER == "groq":
-        return _call_groq(prompt, max_tokens)
-    return _call_claude(prompt, max_tokens)
+    different budgets — a shared cap silently truncated the longer ones.
+
+    Walks `_FAILOVER_ORDER` (primary provider first, then every other
+    provider with a key configured) and returns the first success. A rate
+    limit or outage on one provider is therefore invisible to the caller as
+    long as another configured provider is healthy; the formatted error
+    string is only returned once every configured provider has failed."""
+    last_err = None
+    for provider in _FAILOVER_ORDER:
+        try:
+            return _CALL_FN[provider](prompt, max_tokens)
+        except Exception as e:
+            last_err = e
+            continue
+    return f"[AI rationale unavailable — error: {last_err}]"
 
 
 # ===========================================================================
