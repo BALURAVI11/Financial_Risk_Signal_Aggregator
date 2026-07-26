@@ -241,6 +241,21 @@ def _call_gemini(prompt: str, max_tokens: int = 200) -> str:
     raise last_err
 
 
+class AllProvidersFailed(Exception):
+    """Every configured provider failed for one call (rate limit, outage, bad key)."""
+
+
+def _fallback_note(err: str = "") -> str:
+    """Why the reader is looking at a deterministic template instead of AI prose.
+
+    'Add an API key' is only correct when none is configured; saying that to a
+    user whose key is merely rate-limited sends them to fix the wrong thing."""
+    if err:
+        return (f"_Live AI narration was unavailable for this item "
+                f"({err[:120]}), so a deterministic local summary is shown._")
+    return "Add a GROQ_API_KEY, GEMINI_API_KEY or ANTHROPIC_API_KEY to `.env` for an AI-written version."
+
+
 _CALL_FN = {"groq": _call_groq, "anthropic": _call_claude, "gemini": _call_gemini}
 
 
@@ -252,8 +267,13 @@ def _call_ai(prompt: str, max_tokens: int = 200) -> str:
     Walks `_FAILOVER_ORDER` (primary provider first, then every other
     provider with a key configured) and returns the first success. A rate
     limit or outage on one provider is therefore invisible to the caller as
-    long as another configured provider is healthy; the formatted error
-    string is only returned once every configured provider has failed."""
+    long as another configured provider is healthy.
+
+    Raises AllProvidersFailed once every configured provider has failed, so
+    each caller can substitute its own deterministic local template. Raising
+    rather than returning an error string matters: DRY_RUN is decided once at
+    import time, so a provider dying MID-SESSION would otherwise bypass the
+    offline fallbacks entirely and surface a raw SDK exception to the user."""
     last_err = None
     for provider in _FAILOVER_ORDER:
         try:
@@ -261,7 +281,7 @@ def _call_ai(prompt: str, max_tokens: int = 200) -> str:
         except Exception as e:
             last_err = e
             continue
-    return f"[AI rationale unavailable — error: {last_err}]"
+    raise AllProvidersFailed(str(last_err))
 
 
 # ===========================================================================
@@ -389,7 +409,12 @@ def extract_alert_signals(note: str, account_id: str = "") -> dict:
 
     prompt = _build_extraction_prompt(note, account_id or "unknown")
     for attempt in range(2):          # one retry: LLMs occasionally emit prose
-        raw = _call_ai(prompt)
+        try:
+            raw = _call_ai(prompt)
+        except AllProvidersFailed:
+            result = _fallback_alert_signal(note)
+            result["extraction_mode"] = "keyword-fallback (AI unavailable)"
+            return result
         try:
             result = _validate_alert_signal(_parse_json_object(raw))
             result["extraction_mode"] = f"llm:{PROVIDER}"
@@ -515,14 +540,14 @@ names, dates or allegations. If the evidence is thin or ambiguous, say so
 rather than overstating it."""
 
 
-def _fallback_case_narrative(case: dict) -> str:
+def _fallback_case_narrative(case: dict, err: str = "") -> str:
     return (
         f"**{case['case_tier']}** case ({case['case_score']:.0f}/100) on account "
         f"{case['account_id']} — {case['distinct_signals']} distinct signals across "
         f"{case['corroborating_sources']} source(s): {case.get('sources', 'transactions')}. "
         f"{case['flagged_txns']} of {case['total_txns']} transactions flagged, totalling "
         f"{format_inr(case['flagged_amount'])}. Rules triggered: {case.get('triggered_rules', '')}. "
-        f"Add a GROQ_API_KEY or ANTHROPIC_API_KEY to `.env` for an AI-written case narrative."
+        f"{_fallback_note(err)}"
     )
 
 
@@ -530,10 +555,13 @@ def synthesize_case(case: dict) -> str:
     """Produce the narrative for one case from all of its evidence."""
     if DRY_RUN:
         return _fallback_case_narrative(case)
-    return _call_ai(_build_case_prompt(case), max_tokens=600)
+    try:
+        return _call_ai(_build_case_prompt(case), max_tokens=600)
+    except AllProvidersFailed as e:
+        return _fallback_case_narrative(case, str(e))
 
 
-def _fallback_executive_summary(stats: dict, cases) -> str:
+def _fallback_executive_summary(stats: dict, cases, err: str = "") -> str:
     top = "; ".join(
         f"{c['account_id']} ({c['case_tier']}, {c['distinct_signals']} signals)"
         for _, c in cases.head(5).iterrows()) if len(cases) else "none"
@@ -544,7 +572,7 @@ def _fallback_executive_summary(stats: dict, cases) -> str:
         f"({stats['critical_cases']} critical, {stats['high_cases']} high). "
         f"{stats['multi_source_cases']} case(s) are corroborated by more than one source. "
         f"Highest priority: {top}. "
-        f"Add an API key to `.env` for an AI-written executive briefing."
+        f"{_fallback_note(err)}"
     )
 
 
@@ -569,7 +597,8 @@ def generate_executive_summary(stats: dict, cases, top_n: int = 8) -> str:
 
     rules_block = ", ".join(f"{k} ({v})" for k, v in (stats.get("top_rules") or {}).items())
 
-    return _call_ai(f"""You are the head of a financial-crime unit briefing the compliance
+    try:
+        return _call_ai(f"""You are the head of a financial-crime unit briefing the compliance
 committee on one batch of monitoring output. Be specific and concise.
 
 PORTFOLIO
@@ -592,24 +621,29 @@ Write a briefing of at most 200 words:
 3. Close with the single action you want the committee to authorise first, and why.
 
 Use only the evidence above. Do not invent accounts, amounts or allegations.""",
-                    max_tokens=700)
+                        max_tokens=700)
+    except AllProvidersFailed as e:
+        return _fallback_executive_summary(stats, cases, str(e))
 
 
-def _dry_run_rationale(row) -> str:
-    """Deterministic local fallback used when no API key is configured."""
+def _dry_run_rationale(row, err: str = "") -> str:
+    """Deterministic local fallback — used when no API key is configured, and
+    also when every configured provider fails at call time."""
     reasons = ", ".join(row["flag_reasons"]) if row["flag_reasons"] else "no rule triggers"
     return (
         f"Flagged **{row['risk_tier']}** (score {row['risk_score']}/100) — this {format_inr(row['amount'])} "
         f"transaction on account {row['account_id']} triggered: {reasons}. "
-        f"Add a GROQ_API_KEY or ANTHROPIC_API_KEY to `.env` to generate a live AI-written explanation instead of this template."
+        f"{_fallback_note(err)}"
     )
 
 
 def generate_rationale(row) -> str:
     if DRY_RUN:
         return _dry_run_rationale(row)
-    prompt = _build_prompt(row)
-    return _call_ai(prompt)
+    try:
+        return _call_ai(_build_prompt(row))
+    except AllProvidersFailed as e:
+        return _dry_run_rationale(row, str(e))
 
 
 def add_ai_rationale(flagged_df, limit: int = None):
@@ -635,16 +669,17 @@ def generate_search_summary(query: str, results: list) -> str:
     if not results:
         return "No matching transactions to summarize."
 
-    if DRY_RUN:
+    def _local(err: str = "") -> str:
         tiers = {}
         for r in results:
             t = r.get("risk_tier", "LOW")
             tiers[t] = tiers.get(t, 0) + 1
         tier_str = ", ".join(f"{v} {k}" for k, v in tiers.items())
-        return (
-            f"[Local summary] {len(results)} transaction(s) matched \"{query}\" — {tier_str}. "
-            f"Add a GROQ_API_KEY or ANTHROPIC_API_KEY to `.env` for an AI-generated narrative summary."
-        )
+        return (f"[Local summary] {len(results)} transaction(s) matched \"{query}\" — "
+                f"{tier_str}. {_fallback_note(err)}")
+
+    if DRY_RUN:
+        return _local()
 
     rows_text = "\n".join(
         f"- {r.get('transaction_id')}: ₹{r.get('amount', 0):,.2f} | {r.get('account_id')} | "
@@ -659,7 +694,10 @@ Matching records ({len(results)} total, showing up to 30):
 
 Write a short (2-4 sentence) plain-English summary of what this result set shows,
 highlighting the most important risk patterns. Do not invent facts not present above."""
-    return _call_ai(prompt)
+    try:
+        return _call_ai(prompt)
+    except AllProvidersFailed as e:
+        return _local(str(e))
 
 
 if __name__ == "__main__":
