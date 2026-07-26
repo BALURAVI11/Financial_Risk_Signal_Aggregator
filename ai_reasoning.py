@@ -32,25 +32,54 @@ from currency import format_inr
 
 load_dotenv()
 
-PROVIDER = os.environ.get("AI_PROVIDER", "groq").lower()   # "groq" or "anthropic"
-MODEL = os.environ.get(
+
+def _get_secret(name: str, default: str = "") -> str:
+    """Resolve a credential from the environment first, then Streamlit's secrets store.
+
+    `.env` is deliberately gitignored — secrets must never be committed — which
+    means a DEPLOYED app has no `.env` to read and would silently fall back to
+    the offline template. Hosted Streamlit supplies credentials through its
+    Secrets panel instead, surfaced as `st.secrets`, so both are checked.
+
+    The `st.secrets` lookup is guarded: it raises when no secrets file exists at
+    all, and this module is also imported by CLI entry points (`debug.py`,
+    `__main__`) that run with no Streamlit runtime at all.
+    """
+    value = os.environ.get(name, "")
+    if value.strip():
+        return value.strip()
+    try:
+        import streamlit as st
+        value = st.secrets.get(name, "")
+        if value and str(value).strip():
+            return str(value).strip()
+    except Exception:
+        pass
+    return default
+
+
+PROVIDER = _get_secret("AI_PROVIDER", "groq").lower()      # "groq" or "anthropic"
+MODEL = _get_secret(
     "AI_MODEL",
     "llama-3.3-70b-versatile" if PROVIDER == "groq" else "claude-sonnet-4-6",
 )
 MAX_RETRIES = 3
 
-GROQ_KEY_PRESENT = bool(os.environ.get("GROQ_API_KEY", "").strip())
-ANTHROPIC_KEY_PRESENT = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+GROQ_API_KEY = _get_secret("GROQ_API_KEY")
+ANTHROPIC_API_KEY = _get_secret("ANTHROPIC_API_KEY")
+GROQ_KEY_PRESENT = bool(GROQ_API_KEY)
+ANTHROPIC_KEY_PRESENT = bool(ANTHROPIC_API_KEY)
 
 # Auto-detect: use whichever provider actually has a key configured, falling
 # back to the local template if neither is set. This means the app "just
-# works" the moment a user drops a key into .env, without editing code.
+# works" the moment a key appears — in `.env` locally or in the host's secrets
+# panel once deployed — without editing code.
 if PROVIDER == "groq" and not GROQ_KEY_PRESENT and ANTHROPIC_KEY_PRESENT:
     PROVIDER = "anthropic"
-    MODEL = os.environ.get("AI_MODEL", "claude-sonnet-4-6")
+    MODEL = _get_secret("AI_MODEL", "claude-sonnet-4-6")
 elif PROVIDER == "anthropic" and not ANTHROPIC_KEY_PRESENT and GROQ_KEY_PRESENT:
     PROVIDER = "groq"
-    MODEL = os.environ.get("AI_MODEL", "llama-3.3-70b-versatile")
+    MODEL = _get_secret("AI_MODEL", "llama-3.3-70b-versatile")
 
 HAS_API = (PROVIDER == "groq" and GROQ_KEY_PRESENT) or (PROVIDER == "anthropic" and ANTHROPIC_KEY_PRESENT)
 DRY_RUN = not HAS_API
@@ -64,7 +93,9 @@ FLAG_DESCRIPTIONS = {
     "structuring": "repeated transfers just under the ₹10,00,000 reporting threshold, spread across a few days",
     "amount_volatility": "an amount far above this account's typical transaction size",
     "round_number": "a suspiciously large, exact round-number transfer",
-    "high_risk_country": "involves a country on a high-risk/watchlist jurisdiction list",
+    "high_risk_country": "involves a comprehensively sanctioned jurisdiction, or one on FATF's call-for-action list",
+    "monitored_jurisdiction": "involves a jurisdiction under increased international monitoring, where enhanced due diligence is expected — elevated context, not an allegation in itself",
+    "offshore_centre": "involves an offshore or secrecy jurisdiction; lawful and common in legitimate fund structuring, so it is meaningful only alongside other signals",
     "foreign_transaction": "took place outside the account's home country, which is worth noting even when the country itself isn't on any watchlist",
     "impossible_travel": "two transactions in different countries too close together in time to be physically possible",
     "high_risk_merchant": "a merchant in a high-risk category (e.g. gambling, unregulated crypto, offshore services)",
@@ -109,7 +140,10 @@ Write the risk explanation now (2 sentences, no preamble):"""
 def _call_claude(prompt: str, max_tokens: int = 200) -> str:
     from anthropic import Anthropic
 
-    client = Anthropic()  # reads ANTHROPIC_API_KEY from environment automatically
+    # Passed explicitly rather than relying on the SDK's env-var lookup: on a
+    # deployed app the key arrives via st.secrets and is never in the
+    # environment, so the implicit path would fail there.
+    client = Anthropic(api_key=ANTHROPIC_API_KEY or None)
     for attempt in range(MAX_RETRIES):
         try:
             response = client.messages.create(
@@ -127,7 +161,7 @@ def _call_claude(prompt: str, max_tokens: int = 200) -> str:
 def _call_groq(prompt: str, max_tokens: int = 200) -> str:
     from groq import Groq
 
-    client = Groq()  # reads GROQ_API_KEY from environment automatically
+    client = Groq(api_key=GROQ_API_KEY or None)   # see note in _call_claude
     for attempt in range(MAX_RETRIES):
         try:
             response = client.chat.completions.create(

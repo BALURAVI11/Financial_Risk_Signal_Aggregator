@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 # Import our custom modules
 from data_loader import (load_transactions, load_customers, load_alerts,
                          enrich_transactions)
-from risk_engine import analyze_transactions, CROSS_SOURCE_DETECTORS
+from risk_engine import analyze_transactions, CROSS_SOURCE_DETECTORS, RULE_WEIGHTS
 from cases import build_cases, portfolio_stats, cases_to_export
 import ai_reasoning as AI
 from ai_reasoning import generate_rationale, generate_search_summary, HAS_API, PROVIDER, MODEL
@@ -98,6 +98,19 @@ st.markdown("""
         letter-spacing: 0.1em;
         color: #9CA3AF;
         font-weight: 500;
+        /* Narrow viewports were breaking labels mid-word ("PROCES SED
+           TRANSA CTIONS"). Wrap on word boundaries and let the tracking
+           tighten instead of hyphenating through a word. */
+        overflow-wrap: normal;
+        word-break: keep-all;
+        hyphens: none;
+        line-height: 1.25;
+    }
+
+    @media (max-width: 1100px) {
+        .metric-title { font-size: 0.72rem; letter-spacing: 0.04em; }
+        .metric-val   { font-size: 1.6rem; }
+        .metric-card  { padding: 14px 10px; }
     }
 
     .badge-critical {
@@ -260,6 +273,94 @@ def tier_badge(tier: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Presentation helpers
+#
+# Severity is the one thing an analyst must read at a glance, so it is encoded
+# in colour inside the TABLES — where triage actually happens — not only on the
+# single record they have already drilled into. These helpers only re-render
+# values the engine has already produced; no score, rule or ordering is
+# recomputed here.
+# ---------------------------------------------------------------------------
+TIER_HEX = {"CRITICAL": "#EF4444", "HIGH": "#F97316", "MEDIUM": "#F59E0B", "LOW": "#10B981"}
+TIER_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+TOTAL_SOURCES = 3
+
+
+def style_tier_cell(value: str) -> str:
+    """CSS for a severity cell.
+
+    Streamlit's `:red-background[...]` markdown shortcut is NOT interpreted
+    inside a dataframe cell — it renders as literal text — so severity colour
+    is applied with a pandas Styler, which `st.dataframe` does honour.
+    """
+    hexc = TIER_HEX.get(value)
+    if not hexc:
+        return ""
+    return (f"background-color: {hexc}22; color: {hexc}; "
+            f"font-weight: 700; letter-spacing: .04em;")
+
+
+def source_meter(n) -> str:
+    """Filled/empty dots showing how many of the three sources corroborate a
+    case. Corroboration is the project's core claim, so it deserves a glanceable
+    encoding rather than a bare integer."""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        n = 0
+    n = max(0, min(TOTAL_SOURCES, n))
+    return f"{'●' * n}{'○' * (TOTAL_SOURCES - n)}  {n}/{TOTAL_SOURCES}"
+
+
+def signal_count_label(rules: str) -> str:
+    """A long comma-joined rule string is unreadable in a table cell and gets
+    truncated anyway. Show the count in the list; the names belong on the
+    drill-down, which is where there is room for them."""
+    if not rules or rules == "—":
+        return "—"
+    n = len([r for r in str(rules).split(",") if r.strip()])
+    return f"{n} signal{'s' if n != 1 else ''}"
+
+
+def sync_selection(event, options, state_key) -> None:
+    """Point one session key at the current selection, writable from two places.
+
+    Clicking a table row is the fast path, but a plain selector is kept beside
+    it: Streamlit draws dataframes to a canvas, so row clicks are the one
+    interaction here that cannot be exercised by an automated test. Both write
+    to the SAME key, so they can never disagree and the detail pane can never
+    get stuck if a click fails to land.
+
+    The selector must bind with `key=` and NOT `index=`. Passing an index on
+    every rerun re-asserts the previous value and silently discards the user's
+    new choice; seeding session_state before the widget renders is what lets a
+    row click drive it instead.
+    """
+    if not options:
+        return
+    if state_key not in st.session_state or st.session_state[state_key] not in options:
+        st.session_state[state_key] = options[0]
+
+    try:
+        rows = list(event.selection["rows"]) if event is not None else []
+    except (AttributeError, KeyError, TypeError):
+        rows = []
+    if rows and 0 <= rows[0] < len(options):
+        st.session_state[state_key] = options[rows[0]]
+
+
+def tier_distribution_chart(series):
+    """Tier counts coloured by their own semantic colour.
+
+    Previously every bar was the same blue, which throws away the strongest
+    comparison cue available. Each tier is pivoted into its own series so the
+    colour list lines up with it."""
+    counts = series.value_counts().reindex(TIER_ORDER, fill_value=0)
+    wide = pd.DataFrame({t: [int(counts[t])] for t in TIER_ORDER}, index=["Cases"])
+    st.bar_chart(wide, color=[TIER_HEX[t] for t in TIER_ORDER], height=260)
+
+
+# ---------------------------------------------------------------------------
 # Session state / data loading
 # ---------------------------------------------------------------------------
 # A page refresh gives us a brand-new session, so on first run of a session we
@@ -304,7 +405,20 @@ with st.sidebar:
         st.success(f"AI Connected ({PROVIDER} / {MODEL})")
     else:
         st.info("Local Fallback Engine Active")
-        st.caption("Add a `GROQ_API_KEY` or `ANTHROPIC_API_KEY` to the workspace `.env` file to unlock live AI-generated rationale.")
+        st.caption(
+            "Running on deterministic fallbacks — every feature works, but the "
+            "narratives are templates rather than AI-written."
+        )
+        with st.expander("Enable live AI"):
+            st.markdown(
+                "**Running locally** — add to `risk-aggregator/.env`:\n"
+                "```\nGROQ_API_KEY=your_key_here\n```\n"
+                "**Deployed (Streamlit Cloud)** — `.env` is gitignored and never "
+                "uploaded, so set it in the app's **Settings → Secrets** panel instead:\n"
+                "```toml\nGROQ_API_KEY = \"your_key_here\"\n```\n"
+                "Free keys: [console.groq.com/keys](https://console.groq.com/keys). "
+                "Reboot the app after saving."
+            )
 
     st.markdown("---")
     st.subheader("Data Ingestion")
@@ -482,11 +596,34 @@ with tab_summary:
                    f"{len(cases_df)} account-level cases, ranked by breadth of evidence and "
                    f"then by how many independent sources corroborate them.")
 
-        case_cols = ["case_id", "account_id", "customer_name", "case_score", "case_tier",
-                     "distinct_signals", "corroborating_sources", "sources",
-                     "flagged_txns", "flagged_amount", "triggered_rules"]
-        case_cols = [c for c in case_cols if c in cases_df.columns]
-        st.dataframe(cases_df[case_cols].head(50), use_container_width=True, hide_index=True)
+        st.caption("Select a row to open its case file below.")
+
+        shown = cases_df.head(50)
+        case_view = pd.DataFrame({
+            "Case": shown["case_id"],
+            "Account": shown["account_id"],
+            "Customer": shown.get("customer_name", pd.Series([""] * len(shown), index=shown.index)),
+            "Severity": shown["case_tier"],
+            "Score": shown["case_score"],
+            "Signals": shown["distinct_signals"],
+            "Corroboration": shown["corroborating_sources"].map(source_meter),
+            "Flagged": shown["flagged_txns"],
+            "Value": shown["flagged_amount"].map(format_inr),
+        })
+
+        case_event = st.dataframe(
+            case_view.style.map(style_tier_cell, subset=["Severity"]),
+            use_container_width=True, hide_index=True,
+            on_select="rerun", selection_mode="single-row",
+            column_config={
+                "Severity": st.column_config.TextColumn("Severity", width="small"),
+                "Score": st.column_config.ProgressColumn(
+                    "Score", min_value=0, max_value=100, format="%.0f", width="medium"),
+                "Corroboration": st.column_config.TextColumn(
+                    "Corroboration", width="small",
+                    help="How many of the three sources independently support this case"),
+                "Signals": st.column_config.NumberColumn("Signals", width="small"),
+            })
 
         st.download_button(
             "Download case summary (CSV)",
@@ -494,15 +631,20 @@ with tab_summary:
             file_name="risk_case_summary.csv", mime="text/csv")
 
         st.markdown("<br><hr><br>", unsafe_allow_html=True)
-        st.subheader("Case File")
-        pick = st.selectbox(
-            "Open a case",
-            options=cases_df["case_id"].tolist(),
+
+        # Clicking a row above jumps straight here; the selector mirrors it for
+        # keyboard use and as a guaranteed fallback (see sync_selection).
+        case_ids = shown["case_id"].tolist()
+        sync_selection(case_event, case_ids, "case_pick")
+        picked = st.selectbox(
+            "Case file — click a row above, or choose here",
+            options=case_ids, key="case_pick",
             format_func=lambda cid: (
-                f"{cid} · {cases_df.loc[cases_df.case_id == cid, 'account_id'].iloc[0]} · "
-                f"{cases_df.loc[cases_df.case_id == cid, 'case_tier'].iloc[0]} "
-                f"({cases_df.loc[cases_df.case_id == cid, 'corroborating_sources'].iloc[0]} source/s)"))
-        case = cases_df[cases_df["case_id"] == pick].iloc[0].to_dict()
+                f"{cid} · {shown.loc[shown.case_id == cid, 'account_id'].iloc[0]} · "
+                f"{shown.loc[shown.case_id == cid, 'case_tier'].iloc[0]}"))
+
+        case = shown[shown["case_id"] == picked].iloc[0].to_dict()
+        st.subheader(f"Case File · {case['case_id']} · {case['account_id']}")
 
         ccol1, ccol2 = st.columns([1, 1.4])
         with ccol1:
@@ -512,8 +654,9 @@ with tab_summary:
                 f"**Case score:** `{case['case_score']:.0f}/100`"
                 + (f" · uncapped `{case['case_score_raw']:.0f}`" if case["case_score_raw"] > 100 else ""),
                 f"**Tier:** <span class=\"{tier_badge(case['case_tier'])}\">{case['case_tier']}</span>",
-                f"**Signals:** `{case['distinct_signals']}` across `{case['corroborating_sources']}` source(s)",
-                f"**Sources:** {case.get('sources', '—')}",
+                f"**Signals:** `{case['distinct_signals']}` distinct",
+                f"**Corroboration:** `{source_meter(case['corroborating_sources'])}` — "
+                f"{case.get('sources', '—')}",
                 f"**Flagged:** `{case['flagged_txns']}` of `{case['total_txns']}` txns · "
                 f"`{format_inr(case['flagged_amount'])}`",
                 f"**Window:** `{case['first_seen']}` → `{case['last_seen']}`",
@@ -540,6 +683,28 @@ with tab_summary:
             with st.spinner("Synthesizing case narrative..."):
                 narrative = cached_case_narrative(case["case_id"], case)
             st.markdown(f"""<div class="ai-report">{narrative}</div>""", unsafe_allow_html=True)
+
+            # Where the score actually came from. For a compliance audience an
+            # unexplained number is not usable — this makes the ranking
+            # auditable by showing each contributing rule and its weight.
+            rules_list = case.get("rules_list") or []
+            if rules_list:
+                st.markdown("#### Score composition")
+                breakdown = (pd.DataFrame(
+                    {"Signal": rules_list,
+                     "Weight": [RULE_WEIGHTS.get(r, 0) for r in rules_list]})
+                    .sort_values("Weight", ascending=False)
+                    .set_index("Signal"))
+                # ~38px per bar: below roughly 34 the chart library starts
+                # dropping y-axis labels to avoid overlap, which silently hides
+                # which rule each bar belongs to.
+                st.bar_chart(breakdown, horizontal=True, color="#8B5CF6",
+                             height=max(160, 38 * len(breakdown)))
+                st.caption(
+                    f"Sum of distinct rule weights = **{case['case_score_raw']:.0f}** "
+                    f"(displayed capped at 100). Sources contributing: "
+                    f"{case.get('sources', 'transactions')}."
+                )
 
 # ================= TAB 1: EXECUTIVE DASHBOARD =================
 with tab_metrics:
@@ -578,10 +743,8 @@ with tab_metrics:
     gcol1, gcol2 = st.columns([1, 1])
     with gcol1:
         st.subheader("Risk Rating Distribution")
-        tier_order = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
-        tier_counts = analyzed_df["risk_tier"].value_counts().reindex(tier_order, fill_value=0).reset_index()
-        tier_counts.columns = ["Risk Tier", "Count"]
-        st.bar_chart(tier_counts, x="Risk Tier", y="Count", color="#3B82F6")
+        st.caption("Coloured by severity — the same palette used throughout the app.")
+        tier_distribution_chart(analyzed_df["risk_tier"])
 
     with gcol2:
         st.subheader("Transaction Magnitude vs. Risk Matrix")
@@ -607,14 +770,50 @@ with tab_metrics:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    st.subheader("Risk Signal Composition")
     exploded = analyzed_df.explode("flag_reasons").dropna(subset=["flag_reasons"])
-    if not exploded.empty:
-        rule_counts = exploded["flag_reasons"].value_counts().reset_index()
-        rule_counts.columns = ["Rule", "Occurrences"]
-        st.bar_chart(rule_counts, x="Rule", y="Occurrences", color="#8B5CF6", horizontal=True)
-    else:
-        st.info("No detector rules triggered on this dataset.")
+
+    ccol_a, ccol_b = st.columns([1.6, 1])
+    with ccol_a:
+        st.subheader("Risk Signal Composition")
+        if not exploded.empty:
+            rule_counts = exploded["flag_reasons"].value_counts().reset_index()
+            rule_counts.columns = ["Rule", "Occurrences"]
+            st.bar_chart(rule_counts, x="Rule", y="Occurrences", color="#8B5CF6",
+                         horizontal=True, height=max(260, 34 * len(rule_counts)))
+        else:
+            st.info("No detector rules triggered on this dataset.")
+
+    with ccol_b:
+        # The project's central claim is that combining sources beats any one of
+        # them, and until now nothing on screen showed that. This attributes
+        # every fired signal back to the source that made it possible.
+        st.subheader("Signals by Source")
+        if exploded.empty:
+            st.info("No signals to attribute.")
+        else:
+            def _origin(rule):
+                if rule not in CROSS_SOURCE_DETECTORS:
+                    return "1 · Transactions"
+                return ("3 · Analyst notes" if rule == "adverse_media_hit"
+                        else "2 · Customer / KYC")
+
+            by_source = (exploded["flag_reasons"].map(_origin)
+                         .value_counts()
+                         .reindex(["1 · Transactions", "2 · Customer / KYC",
+                                   "3 · Analyst notes"], fill_value=0))
+            # One bar per source rather than a single stacked bar: the ledger
+            # naturally dominates the count, which squashes the two smaller
+            # sources into unreadable slivers when they share a stack.
+            st.bar_chart(
+                pd.DataFrame({"Signals": by_source.values}, index=by_source.index),
+                horizontal=True, color="#8B5CF6", height=240)
+            enabled = sum(1 for v in by_source if v > 0)
+            st.caption(
+                f"{enabled} of 3 sources are contributing signals. "
+                + ("Load the optional sources in the sidebar to enable the rest."
+                   if enabled < 3 else
+                   "Cases supported by more than one source rank above equally-scored single-source cases.")
+            )
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -682,11 +881,40 @@ with tab_alert_center:
         else:
             st.caption(f"**{matched_count:,}** transactions matched these filters.")
 
-        st.markdown("#### Select a transaction for real-time investigation:")
-        tx_options = queue_df["transaction_id"].tolist()
-        selected_tx_id = st.selectbox("Choose Transaction ID to Investigate:", options=tx_options)
+        st.markdown("#### Prioritised Alert Queue")
+        st.caption("Select a row to investigate that transaction below.")
 
-        selected_row = queue_df[queue_df["transaction_id"] == selected_tx_id].iloc[0].to_dict()
+        queue_view = pd.DataFrame({
+            "Txn": queue_df["transaction_id"],
+            "Account": queue_df["account_id"],
+            "When": queue_df["date_time"],
+            "Amount": queue_df["amount"].map(format_inr),
+            "Country": queue_df["country"],
+            "Severity": queue_df["risk_tier"],
+            "Score": queue_df["risk_score"],
+            "Signals": queue_df["triggered_rules"].map(signal_count_label),
+        })
+        queue_event = st.dataframe(
+            queue_view.style.map(style_tier_cell, subset=["Severity"]),
+            use_container_width=True, hide_index=True,
+            on_select="rerun", selection_mode="single-row",
+            column_config={
+                "Severity": st.column_config.TextColumn("Severity", width="small"),
+                "Score": st.column_config.ProgressColumn(
+                    "Score", min_value=0, max_value=100, format="%.0f", width="medium"),
+                "When": st.column_config.DatetimeColumn("When", format="DD MMM YYYY HH:mm"),
+                "Signals": st.column_config.TextColumn("Signals", width="small"),
+            })
+
+        tx_ids = queue_df["transaction_id"].tolist()
+        sync_selection(queue_event, tx_ids, "txn_pick")
+        picked_tx = st.selectbox(
+            "Investigate — click a row above, or choose here",
+            options=tx_ids, key="txn_pick")
+
+        selected_row = queue_df[
+            queue_df["transaction_id"] == picked_tx].iloc[0].to_dict()
+        st.markdown("<br>", unsafe_allow_html=True)
 
         dcol1, dcol2 = st.columns([1, 1.3])
 
@@ -722,10 +950,6 @@ with tab_alert_center:
                 {explanation}
             </div>
             """, unsafe_allow_html=True)
-
-        st.markdown("<br><hr><br>", unsafe_allow_html=True)
-        st.markdown("#### Prioritised Alert Queue")
-        st.dataframe(queue_df[display_cols], use_container_width=True, hide_index=True)
 
 # ================= TAB 3: AI SEARCH ASSISTANT =================
 with tab_ai_query:

@@ -42,6 +42,8 @@ NOTE ON LIMITATIONS (documented in the README too):
   datasets of different size.
 """
 
+import re
+
 import pandas as pd
 import numpy as np
 
@@ -50,10 +52,85 @@ import numpy as np
 # ---------------------------------------------------------------------------
 # Watchlist / sanctioned jurisdictions — matched against upper-cased country
 # names or ISO-3166 alpha-2 codes, whichever the dataset provides.
-HIGH_RISK_COUNTRIES = {
-    "IRAN", "IR", "NORTH KOREA", "KP", "SYRIA", "SY", "RUSSIA", "RU",
-    "AFGHANISTAN", "AF", "MYANMAR", "MM",
+# ---------------------------------------------------------------------------
+# JURISDICTION RISK — graded into three tiers, not one flat list.
+#
+# Lumping every "high-risk" country together is the single most common way an
+# AML screen becomes useless. A comprehensively sanctioned state and an offshore
+# fund domicile are both "elevated risk", but they are not the SAME risk:
+# Cayman, Jersey and Malta process enormous volumes of entirely lawful business,
+# so scoring them like North Korea buries the real hits under false positives.
+# Each tier therefore has its own detector and its own weight.
+#
+# NOTE FOR PRODUCTION: this is a defensible starting taxonomy, not an
+# authoritative feed. Real deployments must sync from the issuing bodies —
+# FATF (call-for-action + grey list), OFAC / EU / UN sanctions, and RBI &
+# FIU-IND for India — because these lists change and running a stale list is
+# itself a compliance failure.
+# ---------------------------------------------------------------------------
+
+# Tier 1 — comprehensively sanctioned or on FATF's "call for action" list.
+SANCTIONED_COUNTRIES = {
+    "AFGHANISTAN", "BELARUS", "CUBA", "ERITREA", "IRAN", "IRAQ", "LIBYA",
+    "MYANMAR", "NORTH KOREA", "RUSSIA", "SUDAN", "SYRIA", "YEMEN", "ZIMBABWE",
 }
+
+# Tier 2 — under increased monitoring / enhanced due diligence expected.
+MONITORED_COUNTRIES = {
+    "ALBANIA", "ARMENIA", "AZERBAIJAN", "BOSNIA AND HERZEGOVINA", "CAMBODIA",
+    "COLOMBIA", "COTE DIVOIRE", "DEMOCRATIC REPUBLIC OF THE CONGO", "EGYPT",
+    "EQUATORIAL GUINEA", "GUINEA", "GUINEA BISSAU", "GUYANA", "HAITI",
+    "LIBERIA", "MALDIVES", "MOROCCO", "NEPAL", "NIGERIA", "PAKISTAN",
+    "PAPUA NEW GUINEA", "PERU", "RWANDA", "TUNISIA", "TURKMENISTAN",
+    "UGANDA", "UZBEKISTAN",
+}
+
+# Tier 3 — offshore/secrecy jurisdictions. Lawful and extremely common in
+# legitimate structuring of funds; relevant as context, not as an accusation.
+OFFSHORE_CENTRES = {
+    "ANGUILLA", "ANTIGUA AND BARBUDA", "ARUBA", "BAHAMAS", "BARBADOS",
+    "BELIZE", "BERMUDA", "BRITISH VIRGIN ISLANDS", "CAYMAN ISLANDS",
+    "COOK ISLANDS", "GIBRALTAR", "GRENADA", "GUERNSEY", "JERSEY",
+    "MALTA", "MARSHALL ISLANDS", "MONTSERRAT", "NAURU",
+    "NETHERLANDS ANTILLES",   # dissolved in 2010 — retained only so legacy records still match
+    "NIUE", "SAINT KITTS AND NEVIS", "SAINT LUCIA",
+    "SAINT VINCENT AND THE GRENADINES", "SEYCHELLES", "TURKS AND CAICOS",
+    "VANUATU",
+}
+
+# Real feeds spell countries inconsistently. Everything is matched through
+# _norm_country() (accent- and punctuation-insensitive), and these aliases map
+# common variants and ISO codes onto the canonical name used above.
+COUNTRY_ALIASES = {
+    "IR": "IRAN", "ISLAMIC REPUBLIC OF IRAN": "IRAN",
+    "KP": "NORTH KOREA", "DPRK": "NORTH KOREA",
+    "DEMOCRATIC PEOPLES REPUBLIC OF KOREA": "NORTH KOREA",
+    "KOREA DEMOCRATIC PEOPLES REPUBLIC OF": "NORTH KOREA",
+    "SY": "SYRIA", "SYRIAN ARAB REPUBLIC": "SYRIA",
+    "RU": "RUSSIA", "RUSSIAN FEDERATION": "RUSSIA",
+    "AF": "AFGHANISTAN", "MM": "MYANMAR", "BURMA": "MYANMAR",
+    "BY": "BELARUS", "CU": "CUBA", "IQ": "IRAQ", "LY": "LIBYA",
+    "SD": "SUDAN", "YE": "YEMEN", "ER": "ERITREA", "ZW": "ZIMBABWE",
+    "IVORY COAST": "COTE DIVOIRE", "CI": "COTE DIVOIRE",
+    "DRC": "DEMOCRATIC REPUBLIC OF THE CONGO",
+    "DR CONGO": "DEMOCRATIC REPUBLIC OF THE CONGO",
+    "CONGO KINSHASA": "DEMOCRATIC REPUBLIC OF THE CONGO",
+    "GUINEABISSAU": "GUINEA BISSAU",
+    "BVI": "BRITISH VIRGIN ISLANDS",
+    "VIRGIN ISLANDS BRITISH": "BRITISH VIRGIN ISLANDS",
+    "ST KITTS AND NEVIS": "SAINT KITTS AND NEVIS",
+    "ST LUCIA": "SAINT LUCIA",
+    "ST VINCENT AND THE GRENADINES": "SAINT VINCENT AND THE GRENADINES",
+    "TURKS AND CAICOS ISLANDS": "TURKS AND CAICOS",
+    "CURACAO": "NETHERLANDS ANTILLES", "SINT MAARTEN": "NETHERLANDS ANTILLES",
+    "PK": "PAKISTAN", "NG": "NIGERIA", "EG": "EGYPT", "KH": "CAMBODIA",
+    "IN": "INDIA", "IND": "INDIA", "BHARAT": "INDIA",
+}
+
+# Kept for backwards compatibility: the sanctioned tier is what
+# `high_risk_country` has always meant.
+HIGH_RISK_COUNTRIES = SANCTIONED_COUNTRIES
+
 # Used by the lighter-weight foreign_transaction signal below — any country
 # other than this is flagged as "foreign", regardless of watchlist status.
 DOMESTIC_COUNTRY = "INDIA"
@@ -185,7 +262,12 @@ ADVERSE_MEDIA_SEVERITY_THRESHOLD = 60  # 0-100 severity assigned by the LLM extr
 # number) stay LOW unless corroborated by something else.
 # ---------------------------------------------------------------------------
 RULE_WEIGHTS = {
-    "high_risk_country": 65,
+    # Jurisdiction risk is graded, not binary. A sanctioned state alone reaches
+    # HIGH; a monitored one reaches MEDIUM; an offshore centre alone stays low
+    # and only matters when it compounds with something else.
+    "high_risk_country": 65,        # sanctioned / FATF call-for-action
+    "monitored_jurisdiction": 35,   # FATF grey list / enhanced due diligence
+    "offshore_centre": 20,          # lawful but secrecy-friendly
     "impossible_travel": 65,
     "structuring": 70,
     "rapid_drain": 60,
@@ -463,8 +545,55 @@ def detect_round_number(df: pd.DataFrame) -> pd.Series:
 # ---------------------------------------------------------------------------
 # 3. GEOGRAPHIC (approximated — see limitations note at top)
 # ---------------------------------------------------------------------------
+def _norm_country(value) -> str:
+    """Fold one country string to a canonical, matchable form.
+
+    Real extracts are inconsistent: "Côte d'Ivoire", "Cote D Ivoire" and
+    "IVORY COAST" are the same jurisdiction, and a plain uppercase comparison
+    matches none of them to each other. Accents are stripped, punctuation
+    removed, whitespace collapsed, then known aliases and ISO codes resolved.
+    """
+    import unicodedata
+    s = unicodedata.normalize("NFKD", str(value))
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))   # drop accents
+    # Apostrophes are DELETED rather than replaced with a space: turning them
+    # into spaces splits "d'Ivoire" into "D IVOIRE" and "People's" into
+    # "PEOPLE S", neither of which matches anything.
+    s = s.replace("'", "").replace("’", "").replace("`", "")
+    s = re.sub(r"[^A-Za-z ]+", " ", s)                             # . - ( ) etc. -> space
+    s = re.sub(r"\s+", " ", s).strip().upper()
+    return COUNTRY_ALIASES.get(s, s)
+
+
+def _country_key(df: pd.DataFrame) -> pd.Series:
+    """Normalised country per row. Normalisation runs once per DISTINCT value
+    and is then mapped back, so cost scales with the number of countries in the
+    data rather than the number of rows."""
+    raw = df["country"].astype(str)
+    lookup = {v: _norm_country(v) for v in raw.unique()}
+    return raw.map(lookup)
+
+
 def detect_high_risk_country(df: pd.DataFrame) -> pd.Series:
-    return df["country"].isin(HIGH_RISK_COUNTRIES)
+    """Tier 1 — comprehensively sanctioned / FATF call-for-action jurisdictions."""
+    return _country_key(df).isin(SANCTIONED_COUNTRIES)
+
+
+def detect_monitored_jurisdiction(df: pd.DataFrame) -> pd.Series:
+    """Tier 2 — countries under increased international monitoring, where
+    enhanced due diligence is expected but activity is not presumed illicit."""
+    return _country_key(df).isin(MONITORED_COUNTRIES)
+
+
+def detect_offshore_centre(df: pd.DataFrame) -> pd.Series:
+    """Tier 3 — offshore / secrecy jurisdictions.
+
+    Weighted low on purpose. Using one of these is lawful and routine in
+    legitimate fund structuring, so on its own it is context rather than a
+    finding. It earns its place by compounding: an offshore counterparty is
+    unremarkable, but an offshore counterparty on an account whose declared
+    income cannot support the flow is worth a look."""
+    return _country_key(df).isin(OFFSHORE_CENTRES)
 
 
 def detect_foreign_transaction(df: pd.DataFrame) -> pd.Series:
@@ -472,8 +601,11 @@ def detect_foreign_transaction(df: pd.DataFrame) -> pd.Series:
     the sanctioned-country watchlist, useful when most activity is expected
     to be domestic. Weak on its own (foreign transactions are common and
     often legitimate) but meaningfully compounds with other signals — e.g.
-    a foreign transaction at 3am is more suspicious than either fact alone."""
-    return df["country"] != DOMESTIC_COUNTRY
+    a foreign transaction at 3am is more suspicious than either fact alone.
+
+    Uses the same normalisation as the tiered detectors, so "IN", "Bharat" and
+    "india " are all correctly treated as domestic rather than foreign."""
+    return _country_key(df) != DOMESTIC_COUNTRY
 
 
 def detect_impossible_travel(df: pd.DataFrame) -> pd.Series:
@@ -759,6 +891,8 @@ DETECTORS = {
     "amount_volatility": detect_amount_volatility,
     "round_number": detect_round_number,
     "high_risk_country": detect_high_risk_country,
+    "monitored_jurisdiction": detect_monitored_jurisdiction,
+    "offshore_centre": detect_offshore_centre,
     "foreign_transaction": detect_foreign_transaction,
     "impossible_travel": detect_impossible_travel,
     "high_risk_merchant": detect_high_risk_merchant,

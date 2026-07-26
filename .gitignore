@@ -2,6 +2,9 @@
 venv/
 .env
 
+# Streamlit local secrets — the deployed app gets these from its Secrets panel
+.streamlit/secrets.toml
+
 # Cache files
 __pycache__/
 *.py[cod]

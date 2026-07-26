@@ -14,7 +14,7 @@ those fragmented signals is the whole point.
 
 | Source | Type | Unlocks |
 |---|---|---|
-| 1. Transaction ledger *(required)* | Structured | 16 behavioural/statistical detectors |
+| 1. Transaction ledger *(required)* | Structured | 18 behavioural/statistical detectors |
 | 2. Customer / KYC master *(optional)* | Structured | `income_inconsistency`, `pep_exposure` |
 | 3. Analyst notes / adverse media *(optional)* | **Unstructured** | `adverse_media_hit` (via LLM extraction) |
 
@@ -37,7 +37,7 @@ guessing.
    strips currency symbols from amounts and balance, coerces non-numeric
    junk to NaN instead of crashing, drops zero/negative amounts, dedupes)
    and reports what it dropped and why.
-3. **Detect** — `risk_engine.analyze_transactions()` runs 16 independent rule
+3. **Detect** — `risk_engine.analyze_transactions()` runs 21 independent rule
    detectors (velocity, structuring, geography, merchant risk, behavioral
    deviation — see below) over every transaction and combines the results into
    a single weighted **risk_score (0–100)** and **risk_tier**
@@ -93,7 +93,7 @@ Anthropic API (Claude) · python-dotenv
 |---|---|
 | Velocity/frequency | card_testing, high_velocity, rapid_drain (balance-aware, see below) |
 | Amount/volume | structuring (near ₹10,00,000 CTR threshold), amount_volatility (robust log-scale outlier test), round_number (dataset-relative) |
-| Geographic | high_risk_country (sanctions/watchlist jurisdictions), foreign_transaction (any non-domestic country, weak signal), impossible_travel |
+| Geographic | **high_risk_country** (sanctioned / FATF call-for-action, wt 65), **monitored_jurisdiction** (FATF grey list, wt 35), **offshore_centre** (secrecy jurisdictions, wt 20), foreign_transaction (any non-domestic, wt 12), impossible_travel |
 | Merchant/beneficiary | high_risk_merchant, fan_in (mule-account pattern) |
 | **Cross-source** | **income_inconsistency** (annualised throughput vs declared income), **pep_exposure** (PEP + cross-border/high-value), **adverse_media_hit** (LLM-scored analyst note) |
 | Time/behavioral | odd_hours, dormant_awakening (adaptive gap), new_merchant_large_amount, new_account_large_first_txn, daily_frequency_spike (leave-one-out z-score) |
@@ -223,6 +223,33 @@ Run it:
 ```bash
 streamlit run app.py
 ```
+
+### Deploying
+
+`.env` is gitignored — secrets must never be committed — so a deployed app has
+no `.env` to read and would otherwise fall back to the offline templates.
+Credentials are therefore resolved from **the environment first, then
+`st.secrets`**, which covers both cases without a code change:
+
+| Where | How to supply the key |
+|---|---|
+| Local | `risk-aggregator/.env` (as above) |
+| Streamlit Community Cloud | App → **Settings → Secrets**, then reboot |
+| Any container/PaaS (Render, Fly, HF Spaces…) | Standard environment variables |
+
+On Streamlit Cloud the Secrets panel takes TOML:
+```toml
+AI_PROVIDER  = "groq"
+GROQ_API_KEY = "your_key_here"
+```
+
+Keys are also passed explicitly into the Groq/Anthropic clients rather than
+relying on their implicit environment lookup — a key arriving via `st.secrets`
+never reaches the environment, so the implicit path would silently fail in
+exactly the deployed case it is needed for.
+
+The sidebar always states which mode is active, so a missing key is visible
+rather than silent.
 
 ## Example Input → Output
 
